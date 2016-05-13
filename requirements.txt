@@ -1,0 +1,4 @@
+Flask==0.10.1
+gunicorn==19.4.5
+requests==2.10.0
+dxe-airtable==1.0.0
