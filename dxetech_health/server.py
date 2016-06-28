@@ -1,4 +1,5 @@
-"""Health endpoint to report the status of all our services/products.
+"""
+Health endpoint to report the status of all our services/products.
 
 Uptime Robot polls this endpoint and searches for string matches to
 see which services are up and which are down. If any are down, it will
@@ -9,68 +10,21 @@ mutually unique though, so the success match for one vital can't be
 mistaken for another. Therefore if the text of the strings here change,
 the Uptime Robot string matching rules would need to be updated.
 """
-import datetime
-import os
 import logging
-from logging.handlers import RotatingFileHandler
-
-from boto.s3.connection import S3Connection
 from flask import Flask, jsonify
 import requests
 
-
-CHAPTER_MAP_TIMING_WINDOW = datetime.timedelta(hours=4)  # Should update every hour
-AIRTABLE_BACKUP_TIMING_WINDOW = datetime.timedelta(days=1)  # Should update every 12 hours
-DASHBOARD_DATA_TIMING_WINDOW = datetime.timedelta(days=2)  # Should update every day
-
-S3_BUCKET = "dxe-backup"
-S3_AIRTABLE_BACKUP_DIR = "airtable"
-S3_ACCESS_KEY = os.environ["AIRTABLE_BACKUP_AWS_ACCESS_KEY_ID"]
-S3_SECRET_KEY = os.environ["AIRTABLE_BACKUP_AWS_SECRET_ACCESS_KEY"]
-CHAPTER_DATA_PATH = "/var/www/maps/chapter_data.json"
-CHAPTER_MAP_URL = "http://{}/maps/chapter_map.html"
-FACEBOOK_DATA_URL = "http://{}/facebook/attending_event"
-LATEST_PLEDGERS_URL = "http://{}/pledge/latest_pledgers/{}"
-IMPORTANT_LATEST_PLEDGERS_FIELDS = ["Name", "Country", "City", "days_ago"]
-DASHBOARD_DATA_PATH = "/var/www/dashboard/monthly_attendees.csv"
-
-LOG_LOCATION = "/opt/dxe/logs/health"
-
 app = Flask(__name__)
-file_handler = RotatingFileHandler(LOG_LOCATION, maxBytes=100000, backupCount=100)
-file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-app.logger.addHandler(file_handler)
 app.logger.setLevel(logging.DEBUG)
 
 
-def this_server_ip():
-    """Get the ip address of this server."""
+def chapters_map_loads():
+    """
+    Test to see if the chapter map page loads.
+    """
     try:
-        # Using ec2's metadata api
-        # http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html
-        r = requests.get("http://169.254.169.254/latest/meta-data/public-ipv4", timeout=.5)
-        return r.text
-    except:
-        return "localhost"
-
-
-def chapter_map_data_updating():
-    """Test to see if the chapter map data is updating."""
-    try:
-        time_since_last_update = datetime.datetime.now() - datetime.datetime.fromtimestamp(os.path.getmtime(CHAPTER_DATA_PATH))
-    except os.error:
-
-        return "Failure: unable to read chapter_data.json"
-    if time_since_last_update < CHAPTER_MAP_TIMING_WINDOW:
-        return "Success: chapter map last updated {} ago".format(time_since_last_update)
-    return "Failure: chapter map last updated {} ago".format(time_since_last_update)
-
-
-def chapter_map_page_loads():
-    """Test to see if the chapter map page loads."""
-    try:
-        r = requests.get(CHAPTER_MAP_URL.format(this_server_ip()), timeout=1)
-        if r.status_code == 200:  # todo yo are there any other good 200s?
+        r = requests.get('http://chapters-map.dxetech.org/', timeout=1)
+        if r.status_code == 200:
             return "Success: map HTTP Response Code {}".format(r.status_code)
         return "Failure: HTTP Response Code {}".format(r.status_code)
     except requests.exceptions.ConnectionError:
@@ -79,36 +33,23 @@ def chapter_map_page_loads():
         return "Failure: Request Timed Out"
 
 
-def chapter_map_status():
-    return {"name": "Chapter Map", "vitals": [chapter_map_data_updating(), chapter_map_page_loads()]}
+def chapters_map_status():
+    return {
+        "name": "Chapter Map",
+        "vitals": [chapters_map_loads()]
+    }
 
 
-def airtable_backup_key_to_dt(s):
-    return datetime.datetime.strptime(s, "airtable/base_backup_%Y-%m-%d_%H:%M:%S.zip")
-
-
-def airtable_backup_recurring():
-    """Test to see if the airtable backup is occurring."""
-    conn = S3Connection(S3_ACCESS_KEY, S3_SECRET_KEY)
-    b = conn.get_bucket(S3_BUCKET)
-    last_backup = max([airtable_backup_key_to_dt(k.name) for k in b.list(S3_AIRTABLE_BACKUP_DIR + "/", "/") if k.name[-1] != "/"])
-    time_since_last_backup = datetime.datetime.now() - last_backup
-    if time_since_last_backup < AIRTABLE_BACKUP_TIMING_WINDOW:
-        return "Success: last backed up {} ago".format(time_since_last_backup)
-    return "Failure: last backed up {} ago".format(time_since_last_backup)
-
-
-def airtable_backup_status():
-    return {"name": "Airtable Backup", "vitals": [airtable_backup_recurring()]}
-
-
-def fb_event_count_present():
-    """Test to see if the facebook data endpoint returns an attendance count for events."""
+def facebook_api_returning_event_data():
+    """
+    Test to see if the facebook data endpoint returns an
+    attendance count for events.
+    """
     try:
         r = requests.get(
-            FACEBOOK_DATA_URL.format(this_server_ip()),
+            'http://facebook-api.dxetech.org/attending_event',
             params={"event_id": 1697430973810357},
-            timeout=1,
+            timeout=1
         )
         if r.status_code == 200:
             if "count" in r.json():
@@ -125,15 +66,22 @@ def fb_event_count_present():
         return "Failure: Unknown Error"
 
 
-def facebook_data_status():
-    return {"name": "Facebook Event Data", "vitals": [fb_event_count_present()]}
+def facebook_api_status():
+    return {
+        "name": "Facebook Event Data",
+        "vitals": [facebook_api_returning_event_data()]
+    }
 
 
-def latest_pledgers_returns_stuff():
-    """Test to see if the latest_pledgers endpoint 200s with some names"""
+def liberationpledge_api_returning_data():
+    """
+    Test to see if the latest_pledgers endpoint 200s with some names
+    """
+    IMPORTANT_LATEST_PLEDGERS_FIELDS = ["Name", "Country", "City", "days_ago"]
     try:
         r = requests.get(
-            LATEST_PLEDGERS_URL.format(this_server_ip(), 1),
+            'http://liberationpledge-api.dxetech.org/pledgers',
+            params={'limit': 10},
             timeout=10,
         )
         if r.status_code == 200:
@@ -153,39 +101,19 @@ def latest_pledgers_returns_stuff():
         return "Failure: Unknown Error"
 
 
-def latest_pledgers_status():
-    return {"name": "Latest Pledgers", "vitals": [latest_pledgers_returns_stuff()]}
+def liberationpledge_api_status():
+    return {
+        "name": "Latest Pledgers",
+        "vitals": [liberationpledge_api_returning_data()]
+    }
 
 
-def dashboard_data_updating():
-    """Test to see if the dashboard data is updating."""
-    app.logger.info ("dashboard data updating called")
-    try:
-        now = datetime.datetime.now()
-        then = datetime.datetime.fromtimestamp(os.path.getmtime(DASHBOARD_DATA_PATH))
-        time_since_last_update = now - then
-    except os.error:
-        app.logger.debug("failexcept %s - %s = %s" % (now, then, time_since_last_update))
-        return "Failure: unable to read monthly_attendees.csv"
-    if time_since_last_update < DASHBOARD_DATA_TIMING_WINDOW:
-        app.logger.debug("success %s - %s = %s" % (now, then, time_since_last_update))
-        return "Success: dashboard last updated {} ago".format(time_since_last_update)
-    app.logger.debug("failif %s - %s = %s" % (now, then, time_since_last_update))
-    return "Failure: dashboard last updated {} ago".format(time_since_last_update)
-
-
-def dashboard_data_status():
-    return {"name": "Dashboard Data", "vitals": [dashboard_data_updating()]}
-
-
-@app.route('/health')
+@app.route('/')
 def health():
     return jsonify({"products": [
-        chapter_map_status(),
-        airtable_backup_status(),
-        facebook_data_status(),
-        latest_pledgers_status(),
-        dashboard_data_status(),
+        chapters_map_status(),
+        facebook_api_status(),
+        liberationpledge_api_status()
     ]})
 
 
